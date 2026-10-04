@@ -30,20 +30,6 @@ local DEFAULT_CACHE_HOLDER = workspace
 
 local NextProjectileID = 0
 
-local function TerminateCast(cast: any, castTerminatingFunction: TypeDef.OnCastTerminatingFunction?)
-	if cast._Destroying then return end
-	cast._Destroying = true
-
-	if castTerminatingFunction then
-		castTerminatingFunction((cast :: any))
-	end
-
-	for key, _ in (cast :: any) do
-		cast[key] = nil
-	end
-end
-
-
 function BaseCast.Init(events: TypeDef.FastCastEvents, Data: any)
 	local self = setmetatable({}, BaseCast)
 	self.Actives = {}
@@ -253,8 +239,20 @@ Destroys the BaseCast instance and cleans up resources.
 
 ]=]
 function BaseCast:Destroy()
+	if self._Destroyed then return end
+	self._Destroyed = true
 	if self.SerialSimulation then
 		self.SerialSimulation:Stop()
+	end
+
+	if self.SerialSimulation then
+		while #self.SerialSimulation.casts_ID > 0 do
+			local id = self.SerialSimulation.casts_ID[#self.SerialSimulation.casts_ID]
+			self:_TerminateCast(id, nil)
+			self.SerialSimulation:Unregister(id)
+		end
+		self.SerialSimulation.queuedEvents = {}
+		self.SerialSimulation.queuedVisualizes = {}
 	end
 
 	if self.ObjectCacheInstance then
@@ -263,10 +261,6 @@ function BaseCast:Destroy()
 
 	if self.Motor6DCacheInstance then
 		self.Motor6DCacheInstance:Destroy()
-	end
-
-	for _, v in self.Actives do
-		TerminateCast(v)
 	end
 
 	self.Actives = {}

@@ -42,7 +42,7 @@ local Cache = {}
 Cache.__index = Cache
 Cache.__type = "ObjectCache"
 
-function Cache:_GetNew(Amount: number, Warn: boolean)
+function Cache:_GetNew(Amount: number, Warn: boolean, Checkout: boolean?)
 	if Warn then
 		warn(`ObjectCache: Cache retrieval exceeded preallocated amount! expanding by {Amount}...`)
 	end
@@ -75,11 +75,11 @@ function Cache:_GetNew(Amount: number, Warn: boolean)
 		(Object:: Instance).Parent = CacheHolder
 	end
 
-	return table.remove(FreeObjectsContainer)
+	return if Checkout then table.remove(FreeObjectsContainer) else nil
 end
 
 function Cache:GetPart(PartCFrame: CFrame?): BasePart
-	local Object = table.remove(self._FreeObjects) or self:_GetNew(self._ExpandAmount, true)
+	local Object = table.remove(self._FreeObjects) or self:_GetNew(self._ExpandAmount, true, true)
 	local Part = if self._IsTemplateModel then (Object :: Model).PrimaryPart :: BasePart else Object :: BasePart
 
 	self._PartToObject[Part] = Object
@@ -126,7 +126,9 @@ end
 
 function Cache:ExpandCache(Amount: number)
 	assert(typeof(Amount) == "number" and Amount >= 0, `Invalid argument #1 to 'ObjectCache:ExpandCache' (positive number expected, got {typeof(Amount)})`)
-	self:_GetNew(Amount, false)
+	if Amount > 0 then
+		self:_GetNew(Amount, false, false)
+	end
 end
 function Cache:SetExpandAmount(Amount: number)
 	assert(typeof(Amount) == "number" and Amount > 0, `Invalid argument #1 to 'ObjectCache:SetExpandAmount' (positive number expected, got {typeof(Amount)})`)

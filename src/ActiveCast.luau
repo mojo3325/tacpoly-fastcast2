@@ -52,10 +52,15 @@ function ActiveCast.createCastData(
 	ObjectCacheRef: any,
 	_parallel: boolean?
 ): any
+	assert(
+		behavior.EndAge == nil or (behavior.EndAge >= 0 and behavior.EndAge < math.huge),
+		"EndAge must be finite and nonnegative"
+	)
 	local cast = {
 		Caster = BaseCast,
 		StateInfo = {
 			TotalRuntime = 0,
+			EndAge = behavior.EndAge,
 			DistanceCovered = 0,
 			HighFidelitySegmentSize = behavior.HighFidelitySegmentSize,
 			HighFidelityBehavior = behavior.HighFidelityBehavior,

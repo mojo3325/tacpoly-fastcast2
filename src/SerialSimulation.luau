@@ -70,10 +70,7 @@ type QueuedVisualizeHitData = {
 	sub: boolean
 }
 
--- queued things
-
-local queuedEvents: { [number]: { QueuedEventData } } = {}
-local queuedVisualizes: { [number]: { QueuedVisualizeCastData | QueuedVisualizeHitData }} = {}
+-- queued things belong to each SerialSimulation instance.
 
 local castHandlers = {
 	[EnumCastTypes.Raycast] = function(
@@ -282,7 +279,7 @@ function SerialSimulation:Register(cast: any)
 		end
 	end
 
-	queuedEvents[id] = {}
+	self.queuedEvents[id] = {}
 end
 
 function SerialSimulation:Unregister(castID: number)
@@ -302,6 +299,7 @@ function SerialSimulation:Unregister(castID: number)
 	casts_CFrame[castID] = nil
 	casts_CastType[castID] = nil
 	casts_CastVariant[castID] = nil
+	casts_MaxDistance[castID] = nil
 	casts_RayDisplacement[castID] = nil
 
 	if casts_ActiveMotor6Ds[castID] then
@@ -320,8 +318,8 @@ function SerialSimulation:Unregister(castID: number)
 		self.casts_ID_Index[castID] = nil
 	end
 
-	queuedEvents[castID] = nil
-	queuedVisualizes[castID] = nil
+	self.queuedEvents[castID] = nil
+	self.queuedVisualizes[castID] = nil
 end
 
 function SerialSimulation:SetMovementModeEnabled(enabled: boolean, mode: "BulkMoveTo" | "Motor6D")
@@ -356,11 +354,11 @@ function SerialSimulation:QueueVisualize(castID: number, visualizeData: QueuedVi
 		return
 	end
 
-	if not queuedVisualizes[castID] then
-		queuedVisualizes[castID] = {}
+	if not self.queuedVisualizes[castID] then
+		self.queuedVisualizes[castID] = {}
 	end
 
-	table.insert(queuedVisualizes[castID], visualizeData)
+	table.insert(self.queuedVisualizes[castID], visualizeData)
 end
 
 function SerialSimulation:FireQueuedVisualizes(unFiredVisualizes: { [number]: { QueuedVisualizeCastData | QueuedVisualizeHitData }})
@@ -412,10 +410,19 @@ end
 
 function SerialSimulation:QueueEvent(castID: number, eventType: string, ...: any)
 	local args = { ... }
-	if not queuedEvents[castID] then
-		queuedEvents[castID] = {}
+	local cast = self.ActivesRef[castID]
+	if cast and cast.StateInfo.EndAge ~= nil then
+		if cast.StateInfo.TerminationReason ~= nil then
+			return -- no damage/length callbacks may be queued after a terminal
+		end
+		if eventType == "CastTerminating" then
+			cast.StateInfo.TerminationReason = args[1] or "Other"
+		end
 	end
-	table.insert(queuedEvents[castID], {
+	if not self.queuedEvents[castID] then
+		self.queuedEvents[castID] = {}
+	end
+	table.insert(self.queuedEvents[castID], {
 		eventType = eventType,
 		args = args
 	})
@@ -438,7 +445,7 @@ function SerialSimulation:FireQueuedEvents(unFiredEvents: { [number]: { QueuedEv
 
 		for _, event in eventList do
 			local cast = self.ActivesRef[castID]
-			if not cast then
+			if not cast or (cast.StateInfo.EndAge ~= nil and cast._Destroying and event.eventType ~= "CastTerminating") then
 				continue
 			end
 
@@ -524,6 +531,18 @@ function SerialSimulation:SimulateCast(
 	if DebugLogging.Casting then
 		print("Casting for frame - SimulateCast")
 	end
+	local state = self.ActivesRef[id].StateInfo
+	local endAge = state.EndAge
+	if endAge ~= nil then
+		if state.TerminationReason ~= nil then
+			return
+		end
+		delta = math.min(delta, math.max(0, endAge - casts_TotalRunTime[id]))
+		if delta <= 0 then
+			self:QueueEvent(id, "CastTerminating", "Range")
+			return
+		end
+	end
 	local trajectory = casts_Trajectory[id]
 
 	local origin = trajectory.Origin
@@ -535,7 +554,9 @@ function SerialSimulation:SimulateCast(
 
 	local lastDelta = casts_TotalRunTime[id] - trajectory.StartTime
 
-	casts_TotalRunTime[id] += delta
+	casts_TotalRunTime[id] = if endAge ~= nil
+		then math.min(endAge, casts_TotalRunTime[id] + delta)
+		else casts_TotalRunTime[id] + delta
 
 	totalDelta = casts_TotalRunTime[id] - trajectory.StartTime
 
@@ -633,10 +654,18 @@ function SerialSimulation:SimulateCast(
 						initialVelocity, 
 						acceleration
 					)
-					local subRayDir = subVelocity * timeIncrement
+					local subOrigin = if endAge ~= nil
+						then GetPositionAtTime(
+							lastDelta + timeIncrement * (segmentIndex - 1),
+							origin,
+							initialVelocity,
+							acceleration
+						)
+						else subPosition
+					local subRayDir = if endAge ~= nil then subPosition - subOrigin else subVelocity * timeIncrement
 					local subResult = castHandler(
 						targetWorldRoot,
-						subPosition,
+						subOrigin,
 						subRayDir,
 						casts_RayInfo[id].Parameters,
 						casts_CastVariant[id]
@@ -660,7 +689,7 @@ function SerialSimulation:SimulateCast(
 						then
 							casts_IsActivelyResimulating[id] = false
 							self:QueueEvent(id, "Hit", subResult, subVelocity, casts_RayInfo[id].CosmeticBulletObject)
-							self:QueueEvent(id, "CastTerminating")
+							self:QueueEvent(id, "CastTerminating", "Hit")
 							self:QueueVisualize(id, {
 								atCF = CFrame.new(subResult.Position),
 								wasPierce = false,
@@ -691,7 +720,7 @@ function SerialSimulation:SimulateCast(
 						sub = false,
 						wasPierce = false
 					}:: any)
-					self:QueueEvent(id, "CastTerminating")
+					self:QueueEvent(id, "CastTerminating", "Hit")
 					return
 				end
 			else
@@ -701,7 +730,7 @@ function SerialSimulation:SimulateCast(
 					sub = false,
 					wasPierce = false
 				}:: any)
-				self:QueueEvent(id, "CastTerminating")
+				self:QueueEvent(id, "CastTerminating", "Hit")
 
 				return
 			end
@@ -715,6 +744,12 @@ function SerialSimulation:SimulateCast(
 		end
 	end
 
+	if endAge ~= nil then
+		if casts_TotalRunTime[id] >= endAge then
+			self:QueueEvent(id, "CastTerminating", "Range")
+		end
+		return -- exact age is authoritative; chord accumulation underestimates curved travel
+	end
 	if casts_DistanceCovered[id] >= casts_MaxDistance[id] then
 		if resultOfCast then
 			self:QueueEvent(id, "Hit", resultOfCast, segmentVelocity, casts_RayInfo[id].CosmeticBulletObject)
@@ -738,6 +773,22 @@ function SerialSimulation:UpdateCasts(delta: number)
 			continue
 		end
 
+		local state = self.ActivesRef[id].StateInfo
+		local castDelta = delta
+		if state.EndAge ~= nil then
+			if state.TerminationReason ~= nil then
+				continue
+			end
+			castDelta = math.min(delta, math.max(0, state.EndAge - casts_TotalRunTime[id]))
+			if castDelta <= 0 then
+				self:QueueEvent(id, "CastTerminating", "Range")
+				continue
+			end
+		end
+		local frameStartAge = casts_TotalRunTime[id]
+		local frameEndAge = if state.EndAge ~= nil
+			then math.min(state.EndAge, frameStartAge + castDelta)
+			else frameStartAge + castDelta
 		local Trajectory: TypeDef.CastTrajectory = casts_Trajectory[id]
 
 		if casts_HighFidelitySegmentSize[id] <= 0 then
@@ -760,7 +811,7 @@ function SerialSimulation:UpdateCasts(delta: number)
 
 			local lastPoint = GetPositionAtTime(totalDelta, origin, initialVelocity, acceleration)
 
-			casts_TotalRunTime[id] += delta
+			casts_TotalRunTime[id] = frameEndAge
 
 			totalDelta = casts_TotalRunTime[id] - Trajectory.StartTime
 
@@ -768,7 +819,9 @@ function SerialSimulation:UpdateCasts(delta: number)
 			local currentVelocity = GetVelocityAtTime(totalDelta, initialVelocity, acceleration)
 			local totalDisplacement = currentPoint - lastPoint
 
-			local rayDir = totalDisplacement.Unit * currentVelocity.Magnitude * delta
+			local rayDir = if state.EndAge ~= nil
+				then totalDisplacement
+				else totalDisplacement.Unit * currentVelocity.Magnitude * castDelta
 
 			local RayInfo = casts_RayInfo[id]
 			local targetWorldRoot = RayInfo.WorldRoot
@@ -782,7 +835,7 @@ function SerialSimulation:UpdateCasts(delta: number)
 			end
 
 			local rayDisplacement = (point - lastPoint).Magnitude
-			casts_TotalRunTime[id] -= delta
+			casts_TotalRunTime[id] = frameStartAge
 
 			local numSegmentsDecimal = rayDisplacement / casts_HighFidelitySegmentSize[id]
 			local numSegmentsReal = math.floor(numSegmentsDecimal)
@@ -790,7 +843,7 @@ function SerialSimulation:UpdateCasts(delta: number)
 				numSegmentsReal = 1
 			end
 
-			local timeIncrement = delta / numSegmentsReal
+			local timeIncrement = castDelta / numSegmentsReal
 
 			if DebugLogging.Calculation then
 				print("Performing subcast! Time increment: " .. timeIncrement .. ", num segments: " .. numSegmentsReal)
@@ -814,7 +867,13 @@ function SerialSimulation:UpdateCasts(delta: number)
 					print("[" .. segmentIndex .. "] Subcast of time increment " .. timeIncrement)
 				end
 
-				self:SimulateCast(id, timeIncrement, self.Events.CanPierce)
+				local stepDelta = if state.EndAge ~= nil and segmentIndex == numSegmentsReal
+					then math.max(0, math.min(state.EndAge, frameEndAge) - casts_TotalRunTime[id])
+					else timeIncrement
+				self:SimulateCast(id, stepDelta, self.Events.CanPierce)
+				if state.EndAge ~= nil and state.TerminationReason ~= nil then
+					break
+				end
 			end
 
 			if cast_nil then
@@ -829,7 +888,7 @@ function SerialSimulation:UpdateCasts(delta: number)
 			end
 			casts_IsActivelyResimulating[id] = false
 		else
-			self:SimulateCast(id, delta, self.Events.CanPierce)
+			self:SimulateCast(id, castDelta, self.Events.CanPierce)
 		end
 	end
 
@@ -849,10 +908,10 @@ function SerialSimulation:UpdateCasts(delta: number)
 	self:UpdateMotor6Ds()
 	self:BulkMoveTo()
 
-	local eventsToProcess = queuedEvents
-	queuedEvents = {}
-	local visualizesToProcess = queuedVisualizes
-	queuedVisualizes = {}
+	local eventsToProcess = self.queuedEvents
+	self.queuedEvents = {}
+	local visualizesToProcess = self.queuedVisualizes
+	self.queuedVisualizes = {}
 
 	self:FireQueuedVisualizes(visualizesToProcess)
 	self:FireQueuedEvents(eventsToProcess)
@@ -868,6 +927,8 @@ function SerialSimulation.new()
 	self.ActivesRef = nil
 	self.casts_ID = {}
 	self.casts_ID_Index = {}
+	self.queuedEvents = {}
+	self.queuedVisualizes = {}
 	return self
 end
 

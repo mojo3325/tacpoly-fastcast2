@@ -367,6 +367,7 @@ export type FastCastEventsConfig = {
 export type FastCastBehavior = {
 	RaycastParams: RaycastParams?,
 	MaxDistance: number,
+	EndAge: number?,
 	Acceleration: Vector3,
 	HighFidelityBehavior: number,
 	HighFidelitySegmentSize: number,
@@ -406,6 +407,8 @@ export type CastStateInfo = {
 	HighFidelityBehavior: number,
 	HighFidelitySegmentSize: number,
 	TotalRuntime: number,
+	EndAge: number?,
+	TerminationReason: ("Range" | "Hit" | "Other")?,
 	DistanceCovered: number,
 	IsActivelySimulatingPierce: boolean,
 	IsActivelyResimulating: boolean,

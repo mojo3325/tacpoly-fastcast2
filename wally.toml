@@ -1,8 +1,8 @@
 [package]
-name = "weenachuangkud/fastcast2"
+name = "mojo3325/tacpoly-fastcast2"
 description = "An improved version of FastCast with Parallel scripting, more extensions, and statically typed"
 author = "Mawin Chuangkud"
-version = "0.1.2" # bumped for publish (0.1.0 & 0.1.1 already in index)
+version = "0.1.2-tacpoly.1" # bumped for publish (0.1.0 & 0.1.1 already in index)
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
 exclude = [
